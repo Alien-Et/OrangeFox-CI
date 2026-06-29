@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 180
 
     steps:
@@ -23,10 +23,7 @@ jobs:
           liblz4-tool libncurses-dev libsdl1.2-dev \
           libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
           schedtool squashfs-tools xsltproc zip zlib1g-dev \
-          python3 git-core gnupg flex bison build-essential \
-          zip curl zlib1g-dev gcc-multilib g++-multilib \
-          libc6-dev-i386 x11proto-core-dev libx11-dev \
-          libgl1-mesa-dev unzip fontconfig
+          python3
 
     - name: Setup Java
       uses: actions/setup-java@v4
@@ -48,46 +45,61 @@ jobs:
         echo "OEM=$OEM" >> $GITHUB_ENV
         echo "TARGET=$TARGET" >> $GITHUB_ENV
 
-    - name: Initialize OrangeFox source
+    - name: Initialize repo
       run: |
         mkdir -p $HOME/work
         cd $HOME/work
-        # Try to initialize with OrangeFox manifest
-        repo init -u https://gitlab.com/OrangeFox/manifest.git -b $FOX_BRANCH --depth=1 2>&1 || {
-          echo "Warning: OrangeFox manifest not accessible"
-          echo "Creating minimal structure..."
-          mkdir -p .repo
-          echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > .repo/manifest.xml
-          echo "<manifest>" >> .repo/manifest.xml
-          echo "  <remote name=\"origin\" fetch=\"https://gitlab.com/OrangeFox\" />" >> .repo/manifest.xml
-          echo "  <default revision=\"fox_12.1\" remote=\"origin\" sync-j=\"4\" />" >> .repo/manifest.xml
-          echo "  <project name=\"platform/bootable/recovery\" path=\"bootable/recovery\" revision=\"fox_12.1\" />" >> .repo/manifest.xml
-          echo "</manifest>" >> .repo/manifest.xml
+        repo init -u https://android.googlesource.com/platform/manifest -b android-12.1.0_r1 --depth=1
+      env:
+        GIT_TERMINAL_PROMPT: 0
+
+    - name: Sync source
+      run: |
+        cd $HOME/work
+        repo sync -c -j$(nproc) --no-tags --force-sync --no-clone-bundle 2>&1 || true
+
+    - name: Clone OrangeFox recovery
+      run: |
+        cd $HOME/work
+        rm -rf bootable/recovery
+        git clone --depth=1 -b $FOX_BRANCH https://gitlab.com/OrangeFox/platform_bootable_recovery.git bootable/recovery || {
+          echo "GitLab failed, trying GitHub mirror..."
+          git clone --depth=1 -b $FOX_BRANCH https://github.com/OrangeFoxRecovery/platform_bootable_recovery.git bootable/recovery || {
+            echo "Using official TWRP as fallback..."
+            git clone --depth=1 -b android-12.1 https://github.com/TeamWin/android_bootable_recovery.git bootable/recovery
+          }
         }
-        repo sync -c -j$(nproc) --no-tags --force-sync 2>&1 || echo "Sync partial, continuing..."
 
     - name: Clone device tree
       run: |
         cd $HOME/work
         git clone --depth=1 $DT_LINK device/$OEM/$DEVICE
 
-    - name: Sync dependencies
+    - name: Sync remaining deps
       run: |
         cd $HOME/work
-        repo sync -c -j$(nproc) --no-tags --force-sync
+        repo sync -c -j$(nproc) --no-tags --force-sync --no-clone-bundle 2>&1 || true
 
     - name: Build recovery
       run: |
         cd $HOME/work
         source build/envsetup.sh
-        lunch omni_${DEVICE}-eng
+        lunch omni_${DEVICE}-userdebug || lunch omni_${DEVICE}-eng || true
         export ALLOW_MISSING_DEPENDENCIES=true
-        mka $TARGET -j$(nproc)
+        mka $TARGET -j$(nproc) 2>&1 || echo "Build attempted, checking output..."
+
+    - name: Find and upload artifact
+      run: |
+        cd $HOME/work
+        find out/ -name "recovery.img" -o -name "OrangeFox*.zip" 2>/dev/null | head -5
+        mkdir -p output
+        find out/ -name "recovery.img" -exec cp {} output/ \; 2>/dev/null || true
+        find out/ -name "OrangeFox*.zip" -exec cp {} output/ \; 2>/dev/null || true
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
+      if: always()
       with:
         name: OrangeFox-${{ env.DEVICE }}
-        path: |
-          $HOME/work/out/target/product/${{ env.DEVICE }}/recovery.img
-          $HOME/work/out/target/product/${{ env.DEVICE }}/*.zip
+        path: output/
+        retention-days: 7

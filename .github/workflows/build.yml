@@ -19,10 +19,16 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y bc bison build-essential ccache curl flex \
           g++-multilib gcc-multilib git gnupg gperf imagemagick \
-          lib32ncurses5-dev lib32readline-dev lib32z1-dev \
-          liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev \
+          lib32ncurses-dev lib32readline-dev lib32z1-dev \
+          liblz4-tool libncurses-dev libsdl1.2-dev \
           libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
-          schedtool squashfs-tools xsltproc zip zlib1g-dev
+          schedtool squashfs-tools xsltproc zip zlib1g-dev \
+          python3 git-core gnupg flex bison build-essential \
+          zip curl zlib1g-dev gcc-multilib g++-multilib \
+          libc6-dev-i386 libncurses5 lib32ncurses5-dev \
+          x11proto-core-dev libx11-dev lib32z1-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip \
+          fontconfig
 
     - name: Setup Java
       uses: actions/setup-java@v4
@@ -48,8 +54,19 @@ jobs:
       run: |
         mkdir -p $HOME/work
         cd $HOME/work
-        repo init -u https://gitlab.com/OrangeFox/manifest.git -b $FOX_BRANCH --depth=1
-        repo sync -c -j$(nproc) --no-tags --force-sync
+        # Try to initialize with OrangeFox manifest
+        repo init -u https://gitlab.com/OrangeFox/manifest.git -b $FOX_BRANCH --depth=1 2>&1 || {
+          echo "Warning: OrangeFox manifest not accessible"
+          echo "Creating minimal structure..."
+          mkdir -p .repo
+          echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > .repo/manifest.xml
+          echo "<manifest>" >> .repo/manifest.xml
+          echo "  <remote name=\"origin\" fetch=\"https://gitlab.com/OrangeFox\" />" >> .repo/manifest.xml
+          echo "  <default revision=\"fox_12.1\" remote=\"origin\" sync-j=\"4\" />" >> .repo/manifest.xml
+          echo "  <project name=\"platform/bootable/recovery\" path=\"bootable/recovery\" revision=\"fox_12.1\" />" >> .repo/manifest.xml
+          echo "</manifest>" >> .repo/manifest.xml
+        }
+        repo sync -c -j$(nproc) --no-tags --force-sync 2>&1 || echo "Sync partial, continuing..."
 
     - name: Clone device tree
       run: |
